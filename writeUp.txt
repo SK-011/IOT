@@ -127,7 +127,7 @@ p4
 I1528007274
 sS'flag'
 p5
-S'{flag}a8ead603f2'
+S'{flag}supaSekret'
 p6
 sS'seq'
 p7
@@ -226,7 +226,7 @@ SELECT * FROM flag;
 +------------------+
 | flag             |
 +------------------+
-| {flag}926f17458d |
+| {flag}supaSekret |
 +------------------+
 1 row in set (0.00 sec)
 
