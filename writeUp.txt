@@ -52,6 +52,7 @@ Nmap done: 256 IP addresses (3 hosts up) scanned in 107.96 seconds
 ########################################################################
 
 # Not much hum...
+# At least we know that the attacker machine is 10.0.42.219, the server is 0.0.42.1 and the client is 10.0.42.149
 
 # First MITM between the client and the server
 echo "1" > /proc/sys/net/ipv4/ip_forward
@@ -155,9 +156,9 @@ class exploit (object):
 
 # We can either replace the legitimate client payload with ours, or simply code an HTTPs client that will serialize such an object
 # put it in a JSON payload, craft the HTTP request and send it to the server
-# Of course we're gonna do the further
+# Of course we're gonna do the further:
 
-<INSERT THE EXPLOIT SOURCE CODE HERE>
+https://raw.githubusercontent.com/SK-011/IOT/master/exploit_server.py
 
 # Get a real shell once the reverse poped
 python -c 'import pty; pty.spawn("/bin/bash")'
@@ -277,10 +278,9 @@ select do_system("echo 'root:root' | chpasswd");
 
 # Now let's p0wn the client
 # We can assume that he suffer the same serialization flaw than the server
-# So we can modfy the server a bit to server a malicious payload to the client
+# So we can modfy the server a bit to server a malicious payload to the client:
 
-
-<INSERT THE EXPLOIT SOURCE CODE HERE>
+https://raw.githubusercontent.com/SK-011/IOT/master/exploit_client.py
 
 # Once we get a shell on the client we ca first grab the flag.txt
 # Then sudo -l give us some interesting output
