@@ -18,19 +18,15 @@ from pprint import pprint
 serverIp = "127.0.0.1"
 serverPort = 65535
 serverUrl = "json"
-#serverCert = '/home/iot/server.crt'
-#serverKey = '/home/iot/server.key'
-#logFile = "/home/iot/server.log"
 serverCert = "server.crt"
 serverKey = "server.key"
 logFile = "server.log"
 
 user = "iot"
-password = "GimmePickle0x42"
-#dbHost = "127.0.0.1"
-dbHost = "172.17.0.2"
+password = ""
+dbHost = "127.0.0.1"
 dbUsr = "root"
-dbPwd = "vFXsujllIh923ojGKKxS"
+dbPwd = ""
 db = "ctf"
 dbTable = "ctf"
 dbCon = None

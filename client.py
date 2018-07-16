@@ -17,16 +17,14 @@ requests.packages.urllib3.disable_warnings (InsecureRequestWarning)
 from pprint import pprint
 
 
-#serverIp = "127.0.0.1"
-serverIp = "10.0.42.1"
+serverIp = "127.0.0.1"
 serverPort = 65535
 serverUrl = "json"
 logFile = "client.log"
-#logFile = "/home/iot/client.log"
 user = "iot"
-password = "GimmePickle0x42"
+password = ""
 workerId = 1337
-flag = "{flag}a8ead603f2"
+flag = ""
 
 logging.basicConfig (filename=logFile, level=logging.DEBUG)
 
